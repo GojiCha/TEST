@@ -39,33 +39,16 @@
             // Attach Firestore functions to the window
             window.FStore = { doc, setDoc, onSnapshot };
             
-            // Authentication and Listener Setup
-            (async () => {
-                try {
-                    // Sign in with custom token (Owner) or anonymously (Customer)
-                    if (window.initialAuthToken) {
-                        await signInWithCustomToken(window.auth, window.initialAuthToken);
-                        console.log("Firebase sign-in initiated (Owner).");
-                    } else {
-                        await signInAnonymously(window.auth);
-                        console.log("Firebase sign-in initiated (Customer).");
-                    }
-                    
-                    // CRITICAL FIX: Wait for the auth state to fully resolve before running the listener
-                    onAuthStateChanged(window.auth, (user) => {
-                        window.initializeFirebaseListener();
-                    });
-
-                } catch (error) {
-                    console.error("Firebase Authentication Error:", error);
-                    // On error, display error status
-                    window.updateShopUI(); 
-                }
-            })();
+            // NOTE: Authentication is now initiated in the main script block's initializeAuthAndListener function
         }
     </script>
     <!-- Configure Tailwind for the Gojira/Retro theme -->
     <script>
+        // --- ADMIN LOGIN CONFIGURATION (CHANGE THESE!) ---
+        const ADMIN_USERNAME = "owner";
+        const ADMIN_PASSWORD = "password123";
+        // --------------------------------------------------
+
         tailwind.config = {
             theme: {
                 extend: {
@@ -131,10 +114,39 @@
             opacity: 0.6; 
             pointer-events: none;
         }
+        /* Admin Modal Styling */
+        #admin-login-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+        }
     </style>
 </head>
 <body class="bg-logo-gray min-h-screen p-4 font-sans flex justify-center text-text-dark">
     
+    <!-- Admin Login Modal (Hidden by default unless ?owner=true) -->
+    <div id="admin-login-modal" class="hidden">
+        <div class="bg-card-bg p-8 border-4 border-text-dark rounded-lg shadow-2xl w-full max-w-sm">
+            <h2 class="text-2xl font-bold text-text-dark mb-4 text-center">Owner Access Required</h2>
+            <p id="login-error-message" class="text-red-500 text-sm text-center mb-3 hidden">Incorrect username or password.</p>
+            <input type="text" id="admin-username" placeholder="Username" 
+                   class="w-full p-3 mb-3 border-2 border-text-dark rounded-none focus:ring-matcha-highlight focus:border-matcha-highlight">
+            <input type="password" id="admin-password" placeholder="Password" 
+                   class="w-full p-3 mb-5 border-2 border-text-dark rounded-none focus:ring-matcha-highlight focus:border-matcha-highlight">
+            <button onclick="attemptAdminLogin()" 
+                    class="w-full py-3 text-white font-bold rounded-none bg-logo-purple hover:bg-logo-green hover:text-logo-purple transition-colors">
+                Log In
+            </button>
+        </div>
+    </div>
+
     <div class="w-full max-w-lg bg-card-bg shadow-2xl border-4 border-text-dark rounded-lg overflow-hidden">
         
         <!-- Header - Themed with Poster Art -->
@@ -239,9 +251,15 @@
         const WHATSAPP_NUMBER = "60126915105"; 
         const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; 
         
+        // --- ADMIN LOGIN CONFIGURATION (CHANGE THESE!) ---
+        const ADMIN_USERNAME = "owner";
+        const ADMIN_PASSWORD = "password123";
+        // --------------------------------------------------
+
         // Global State (will be updated by Firestore)
         let isShopOpen = false;
-        let isOwnerAuthenticated = false; // Check for owner's auth status
+        let isOwnerAuthenticated = false; // Check for owner's auth status (Firebase Token Check)
+        let isAdminLoggedIn = false; // NEW: Check for successful basic login
         let itemSoldOutStatus = {}; 
 
         // Define your menu items
@@ -255,15 +273,36 @@
         // State to track item quantities
         const orderQuantities = {}; 
 
+        // --- ADMIN LOGIN FUNCTIONALITY ---
+
+        /**
+         * Checks the hardcoded credentials and grants admin access.
+         */
+        function attemptAdminLogin() {
+            const usernameInput = document.getElementById('admin-username').value;
+            const passwordInput = document.getElementById('admin-password').value;
+            const errorMessage = document.getElementById('login-error-message');
+
+            if (usernameInput === ADMIN_USERNAME && passwordInput === ADMIN_PASSWORD) {
+                isAdminLoggedIn = true;
+                document.getElementById('admin-login-modal').classList.add('hidden');
+                errorMessage.classList.add('hidden');
+                // Re-render the UI now that the admin is logged in
+                window.initializeFirebaseListener();
+            } else {
+                errorMessage.classList.remove('hidden');
+            }
+        }
+
         // --- FIREBASE FUNCTIONS ---
 
         /**
          * Writes the full status object to Firestore. This updates the global state for everyone.
          */
         async function updateFirestoreStatus() {
-            // Check window.initialAuthToken instead of initialAuthToken
-            if (!window.db || !window.auth.currentUser || !window.isOwnerMode || !isOwnerAuthenticated) {
-                console.warn("Write blocked: Not authenticated as owner or missing database access.");
+            // Only allow write if Firebase Auth, URL param, AND local login are all true
+            if (!window.db || !window.auth.currentUser || !window.isOwnerMode || !isOwnerAuthenticated || !isAdminLoggedIn) {
+                console.warn("Write blocked: Missing owner authorization.");
                 return;
             }
 
@@ -290,8 +329,15 @@
             // Determine if the user is the owner (signed in with token)
             isOwnerAuthenticated = !!window.auth.currentUser && !!window.initialAuthToken;
 
-            // Show admin controls only if URL param and successful owner auth occurred
-            if (window.isOwnerMode && isOwnerAuthenticated) {
+            // --- LOGIN PROMPT CHECK ---
+            if (window.isOwnerMode && isOwnerAuthenticated && !isAdminLoggedIn) {
+                document.getElementById('admin-login-modal').classList.remove('hidden');
+                return;
+            }
+            // --- END LOGIN PROMPT CHECK ---
+
+            // Show admin controls only if ALL three conditions are met
+            if (window.isOwnerMode && isOwnerAuthenticated && isAdminLoggedIn) {
                  document.getElementById('admin-controls').classList.remove('hidden');
             }
 
@@ -310,8 +356,9 @@
                     isShopOpen = false;
                     itemSoldOutStatus = {};
                     
-                    if (window.isOwnerMode && isOwnerAuthenticated) {
-                        updateFirestoreStatus(); // Create document on first load if owner is present
+                    if (window.isOwnerMode && isOwnerAuthenticated && isAdminLoggedIn) {
+                        // Attempt to initialize the document with the default CLOSED status
+                        updateFirestoreStatus(); 
                     }
                 }
                 
@@ -327,6 +374,38 @@
                 unsubscribe(); // Stop listening on error
             });
         }
+        
+        /**
+         * Initiates the Firebase Authentication flow and sets up the listener after auth is ready.
+         */
+        function initializeAuthAndListener() {
+            // Check if Firebase Auth is available
+            if (!window.auth) {
+                console.error("Firebase Auth not initialized. Cannot start listener.");
+                return;
+            }
+
+            // Move the asynchronous sign-in and onAuthStateChanged logic here
+            (async () => {
+                try {
+                    // Sign in with custom token (Owner) or anonymously (Customer)
+                    if (window.initialAuthToken) {
+                        await signInWithCustomToken(window.auth, window.initialAuthToken);
+                    } else {
+                        await signInAnonymously(window.auth);
+                    }
+                    
+                    // CRITICAL FIX: Wait for the auth state to fully resolve before running the listener
+                    onAuthStateChanged(window.auth, (user) => {
+                        window.initializeFirebaseListener();
+                    });
+
+                } catch (error) {
+                    console.error("Firebase Authentication Error:", error);
+                    window.updateShopUI(); 
+                }
+            })();
+        }
 
 
         // --- LOCAL SHOP LOGIC ---
@@ -335,7 +414,7 @@
          * Toggles the sold-out status for a single item and updates Firestore.
          */
         function toggleItemSoldOut(itemId) {
-            if (!window.isOwnerMode || !isOwnerAuthenticated) return;
+            if (!window.isOwnerMode || !isOwnerAuthenticated || !isAdminLoggedIn) return;
             
             const currentStatus = !!itemSoldOutStatus[itemId]; 
             itemSoldOutStatus[itemId] = !currentStatus;
@@ -349,7 +428,7 @@
          * Toggles the shop's open/closed status and updates Firestore.
          */
         function toggleShopStatus() {
-            if (!window.isOwnerMode || !isOwnerAuthenticated) return;
+            if (!window.isOwnerMode || !isOwnerAuthenticated || !isAdminLoggedIn) return;
             
             isShopOpen = !isShopOpen;
             
@@ -396,7 +475,8 @@
                     orderQuantities[item.id] = 0;
                 }
 
-                const ownerToggle = (window.isOwnerMode && isOwnerAuthenticated) ? `
+                // Only show toggles if OwnerMode, Firebase Auth, AND Local Admin Login are all true
+                const ownerToggle = (window.isOwnerMode && isOwnerAuthenticated && isAdminLoggedIn) ? `
                     <button class="relative z-20 ml-4 p-1 text-xs font-semibold rounded-sm transition-colors duration-150 border-2 ${isItemSoldOut ? 'bg-red-600 text-white border-red-800' : 'bg-logo-green text-logo-purple border-logo-purple'}"
                         onclick="event.stopPropagation(); toggleItemSoldOut(${item.id})">
                         ${isItemSoldOut ? 'RE-STOCK' : 'SOLD OUT'}
@@ -580,6 +660,7 @@
              // Initial status update renders the default CLOSED state immediately
              updateShopUI(); 
              renderMenu(); 
+             initializeAuthAndListener(); // Start the Firebase flow
         };
 
     </script>

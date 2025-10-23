@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Goji Cha - Awaken Your Inner Kaiju</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        // FIX: Correctly read the environment variable name
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // FIX: Assign required variables to the window object for the main script to access
+        window.initialAuthToken = initialAuthToken; 
+        
+        // Flag to indicate if owner mode is active via URL parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        window.isOwnerMode = urlParams.get('owner') === 'true';
+
+        if (Object.keys(firebaseConfig).length === 0) {
+            console.error("Firebase configuration is missing. Cannot initialize database.");
+            // Force status update to display safe defaults if Firebase is missing
+            document.addEventListener('DOMContentLoaded', () => {
+                window.updateShopUI(); 
+            });
+        } else {
+            const app = initializeApp(firebaseConfig);
+            window.db = getFirestore(app);
+            window.auth = getAuth(app);
+            
+            // Attach Firestore functions to the window
+            window.FStore = { doc, setDoc, onSnapshot };
+            
+            // Authentication and Listener Setup
+            (async () => {
+                try {
+                    // Sign in with custom token (Owner) or anonymously (Customer)
+                    if (window.initialAuthToken) {
+                        await signInWithCustomToken(window.auth, window.initialAuthToken);
+                        console.log("Firebase sign-in initiated (Owner).");
+                    } else {
+                        await signInAnonymously(window.auth);
+                        console.log("Firebase sign-in initiated (Customer).");
+                    }
+                    
+                    // CRITICAL FIX: Wait for the auth state to fully resolve before running the listener
+                    onAuthStateChanged(window.auth, (user) => {
+                        window.initializeFirebaseListener();
+                    });
+
+                } catch (error) {
+                    console.error("Firebase Authentication Error:", error);
+                    // On error, display error status
+                    window.updateShopUI(); 
+                }
+            })();
+        }
+    </script>
+    <!-- Configure Tailwind for the Gojira/Retro theme -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        // NEW LOGO COLORS
+                        'app-bg': '#E7F2E2',
+                        'logo-gray': '#798799', 
+                        'logo-purple': '#892F7F', 
+                        'logo-green': '#81EE4A', 
+                        
+                        // Mapped old colors to new ones
+                        'text-dark': '#892F7F',      
+                        'card-bg': '#F7F4EB',        
+                        'button-main': '#798799',    
+                        'matcha-highlight': '#85c047',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom styles for blocky, retro look */
+        .quantity-btn {
+            @apply p-2 rounded-none text-lg font-bold transition-colors duration-200 bg-text-dark text-white hover:bg-matcha-highlight focus:outline-none focus:ring-2 focus:ring-matcha-highlight;
+            width: 32px;
+            height: 32px; 
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #798799; /* Use the logo gray for buttons */
+        }
+        .quantity-btn:hover {
+            background-color: #81EE4A; /* Hover to bright logo green */
+            color: #892F7F; /* Change text color to dark purple on hover for visibility */
+        }
+        .quantity-input {
+            @apply text-center bg-card-bg border border-text-dark rounded-none mx-1 text-text-dark font-medium;
+            width: 40px;
+            height: 32px;
+        }
+        /* Style for the main confirm button */
+        #confirm-button {
+            background-color: #892F7F; 
+            border-color: #798799;
+            box-shadow: 4px 4px 0 #798799; /* Shadow in the monster gray color */
+        }
+        #confirm-button:hover:not(:disabled) {
+            background-color: #81EE4A; /* Hover to bright logo green */
+            color: #892F7F; /* Text to deep purple */
+            box-shadow: 4px 4px 0 #892F7F; /* Shadow to deep purple */
+        }
+        /* Style for sold out items */
+        .sold-out {
+            @apply opacity-50 pointer-events-none;
+        }
+        /* Style for closed shop state */
+        .shop-closed {
+            /* Dim and disable all interaction on the content when closed */
+            opacity: 0.6; 
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="bg-logo-gray min-h-screen p-4 font-sans flex justify-center text-text-dark">
+    
+    <div class="w-full max-w-lg bg-card-bg shadow-2xl border-4 border-text-dark rounded-lg overflow-hidden">
+        
+        <!-- Header - Themed with Poster Art -->
+        <header class="h-40 relative bg-cover bg-center border-b-4 border-text-dark" 
+                style="background-image: url('501873.png'); background-position: top center;">
+            <div class="absolute inset-0 bg-text-dark opacity-0"></div>
+            <div class="absolute inset-0"></div>
+        </header>
+
+        <div class="p-6 md:p-8">
+            
+            <!-- Information Banner: BSN Staff Only -->
+            <div class="text-center p-3 mb-4 border-4 border-logo-purple bg-logo-green text-logo-purple font-extrabold text-lg rounded-none shadow-md">
+                FOR WISMA BSN ONLY
+            </div>
+
+            <!-- Full Shop Introduction -->
+            <div class="text-center text-base mb-6 border-b border-gray-300 pb-4">
+                <h2 class="text-xl font-bold text-text-dark mb-2">👋 Welcome to Goji Cha!</h2>
+                
+                <p class="text-gray-700 mb-2">
+                    Unleash your inner calm with a playful kick — where matcha meets attitude.
+                    At Goji Cha, we serve handcrafted matcha inspired by Japanese street culture and monster-sized creativity.
+                    Whether you crave a smooth latte, a creamy matcha, or something new and bold — your next favorite drink is just a tap away.
+                </p>
+                <p class="font-extrabold text-text-dark mt-3">
+                    Stay Zen. Stay Zilla. 💚
+                    <span class="block text-sm font-semibold text-gray-700 mt-1">🕘 Open daily: 1 PM – 2 PM (Lunch Hour)</span>
+                </p>
+                <!-- Shop Status Display (Customer Facing) -->
+                <div id="shop-status-display" class="mt-2 text-xl font-black rounded-sm tracking-wider text-red-600">CLOSED</div>
+            </div>
+
+            <!-- Admin Toggle (Owner Control) - HIDDEN BY DEFAULT -->
+            <div id="admin-controls" class="text-center mb-6 hidden">
+                <button onclick="toggleShopStatus()" id="admin-toggle" class="bg-logo-purple text-white p-2 rounded-none text-sm font-bold shadow-md hover:bg-logo-green hover:text-logo-purple">
+                    Shop Toggle: <span id="admin-status-text">CLOSED</span>
+                </button>
+            </div>
+
+            <!-- Content Wrapper - Always enabled -->
+            <div id="order-content" class="transition-opacity duration-300 shop-closed">
+                <!-- Menu Section -->
+                <main id="menu-container" class="space-y-4 mb-6">
+                    <!-- Menu items will be injected here by JavaScript -->
+                </main>
+                
+                <!-- Customer Name Input -->
+                <div class="mb-6">
+                    <label for="customer-name" class="block text-xl font-bold mb-2 text-text-dark">👤 Your Name</label>
+                    <input type="text" id="customer-name"
+                           class="w-full p-3 bg-card-bg border-2 border-text-dark rounded-none focus:ring-matcha-highlight focus:border-matcha-highlight"
+                           placeholder="Enter your name for pickup" required>
+                </div>
+                <!-- End Customer Name Input -->
+
+                <!-- Notes Input Section -->
+                <div class="mb-8">
+                    <label for="order-notes" class="block text-xl font-bold mb-2 text-text-dark">📝 Add Notes</label>
+                    <p class="text-sm text-gray-700 mb-2">E.g., "Less ice" or "I'll be there in 5 mins."</p>
+                    <textarea id="order-notes"
+                              class="w-full p-3 h-20 bg-card-bg border-2 border-text-dark rounded-none focus:ring-matcha-highlight focus:border-matcha-highlight resize-none"
+                              placeholder="Enter specific instructions here..."></textarea>
+                </div>
+                <!-- End Notes Input -->
+
+                <!-- Order Summary & Confirmation Button -->
+                <div class="border-t-4 border-text-dark pt-6">
+                    
+                    <!-- Pickup Info -->
+                    <div class="text-center p-3 mb-4 border-4 border-logo-purple bg-logo-green text-logo-purple font-extrabold text-lg rounded-none shadow-md">
+                        <span>📍 Pickup Location:</span>
+                        <span class="text-text-dark font-extrabold">LEVEL 17</span>
+                    </div>
+
+                    <!-- Total Price -->
+                    <div class="flex justify-between items-center text-xl font-bold text-text-dark mb-4">
+                        <span>Total Price:</span>
+                        <span id="total-price">RM 0.00</span>
+                    </div>
+
+                    <button onclick="confirmOrder()"
+                        id="confirm-button"
+                        disabled
+                        class="w-full py-4 text-white font-bold rounded-none border-2 border-text-dark transition-all duration-200 shadow-[4px_4px_0_#2F2E2A]
+                               bg-button-main hover:bg-matcha-highlight hover:shadow-[4px_4px_0_#4CAF50] disabled:bg-gray-400 disabled:shadow-[4px_4px_0_#9CA3AF]">
+                        Confirm Order
+                    </button>
+                    
+                    <p id="whatsapp-message" class="text-center text-sm text-button-main font-semibold mt-2 hidden">
+                        ERROR: Please set the WhatsApp number in the script.
+                    </p>
+                </div>
+            </div>
+            <!-- End Content Wrapper -->
+        </div>
+        
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const WHATSAPP_NUMBER = "60126915105"; 
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; 
+        
+        // Global State (will be updated by Firestore)
+        let isShopOpen = false;
+        let isOwnerAuthenticated = false; // Check for owner's auth status
+        let itemSoldOutStatus = {}; 
+
+        // Define your menu items
+        const menu = [
+            { id: 1, name: "Matcha Latte", price: 10.00, desc: "Classic iced pure matcha, sweetened/unsweetened, & Oatside milk.", imageUrl: "https://placehold.co/80x80/4CAF50/FFFFFF?text=LATTE" },
+            { id: 2, name: "Strawberry Matcha", price: 13.00, desc: "Sweet strawberry puree layered with cool matcha & Oatside milk.", imageUrl: "https://placehold.co/80x80/D32F2F/4CAF50?text=STRAW" },
+            { id: 3, name: "Earl Grey Matcha", price: 11.00, desc: "Creamy matcha layered with Earl Grey syrup & Oatside milk.", imageUrl: "https://placehold.co/80x80/A1887F/4CAF50?text=EARL" },
+            { id: 4, name: "Lemonade Matcha", price: 12.00, desc: "Tangy fresh sparkling lemonade topped with vibrant matcha.", imageUrl: "https://placehold.co/80x80/FFC107/4CAF50?text=LEMON" },
+        ];
+        
+        // State to track item quantities
+        const orderQuantities = {}; 
+
+        // --- FIREBASE FUNCTIONS ---
+
+        /**
+         * Writes the full status object to Firestore. This updates the global state for everyone.
+         */
+        async function updateFirestoreStatus() {
+            // Check window.initialAuthToken instead of initialAuthToken
+            if (!window.db || !window.auth.currentUser || !window.isOwnerMode || !isOwnerAuthenticated) {
+                console.warn("Write blocked: Not authenticated as owner or missing database access.");
+                return;
+            }
+
+            const statusRef = window.FStore.doc(window.db, `artifacts/${APP_ID}/public/data/shop_status/current`);
+            
+            const newStatus = {
+                isShopOpen: isShopOpen,
+                itemSoldOutStatus: itemSoldOutStatus,
+                lastUpdated: new Date().toISOString()
+            };
+
+            try {
+                await window.FStore.setDoc(statusRef, newStatus, { merge: true });
+                console.log("Firestore status updated successfully.");
+            } catch (error) {
+                console.error("Error setting Firestore document. Check Firestore Rules:", error);
+            }
+        }
+
+        /**
+         * Sets up the real-time listener for the shop's status.
+         */
+        window.initializeFirebaseListener = function() {
+            // Determine if the user is the owner (signed in with token)
+            isOwnerAuthenticated = !!window.auth.currentUser && !!window.initialAuthToken;
+
+            // Show admin controls only if URL param and successful owner auth occurred
+            if (window.isOwnerMode && isOwnerAuthenticated) {
+                 document.getElementById('admin-controls').classList.remove('hidden');
+            }
+
+            // Set up listener to pull the real state from the cloud
+            const statusRef = window.FStore.doc(window.db, `artifacts/${APP_ID}/public/data/shop_status/current`);
+            
+            const unsubscribe = window.FStore.onSnapshot(statusRef, (docSnapshot) => {
+                
+                if (docSnapshot.exists()) {
+                    const data = docSnapshot.data();
+                    
+                    isShopOpen = data.isShopOpen || false;
+                    itemSoldOutStatus = data.itemSoldOutStatus || {};
+                } else {
+                    // If no document exists, owner must create it.
+                    isShopOpen = false;
+                    itemSoldOutStatus = {};
+                    
+                    if (window.isOwnerMode && isOwnerAuthenticated) {
+                        updateFirestoreStatus(); // Create document on first load if owner is present
+                    }
+                }
+                
+                // Update UI based on the new, real global state
+                updateShopUI();
+                renderMenu();
+
+            }, (error) => {
+                console.error("Firestore Listener Error:", error);
+                // Display persistent error message if the listener fails after initialization
+                document.getElementById('shop-status-display').textContent = "CONNECTION FAILED";
+                document.getElementById('shop-status-display').className = "mt-2 text-xl font-black rounded-sm tracking-wider text-red-600";
+                unsubscribe(); // Stop listening on error
+            });
+        }
+
+
+        // --- LOCAL SHOP LOGIC ---
+
+        /**
+         * Toggles the sold-out status for a single item and updates Firestore.
+         */
+        function toggleItemSoldOut(itemId) {
+            if (!window.isOwnerMode || !isOwnerAuthenticated) return;
+            
+            const currentStatus = !!itemSoldOutStatus[itemId]; 
+            itemSoldOutStatus[itemId] = !currentStatus;
+            
+            orderQuantities[itemId] = 0; // Clear quantity when changing status
+
+            updateFirestoreStatus();
+        }
+
+        /**
+         * Toggles the shop's open/closed status and updates Firestore.
+         */
+        function toggleShopStatus() {
+            if (!window.isOwnerMode || !isOwnerAuthenticated) return;
+            
+            isShopOpen = !isShopOpen;
+            
+            updateFirestoreStatus();
+        }
+        
+        /**
+         * Updates all UI elements (status text, dimmer, button) based on the current shop status.
+         */
+        function updateShopUI() {
+            const statusDisplay = document.getElementById('shop-status-display');
+            const adminToggleText = document.getElementById('admin-status-text');
+            const orderContent = document.getElementById('order-content');
+            
+            if (isShopOpen) {
+                // OPEN state
+                statusDisplay.textContent = "NOW OPEN";
+                statusDisplay.className = "mt-2 text-xl font-black rounded-sm tracking-wider text-logo-green";
+                adminToggleText.textContent = "OPEN";
+                orderContent.classList.remove('shop-closed');
+            } else {
+                // CLOSED state
+                statusDisplay.textContent = "CLOSED";
+                statusDisplay.className = "mt-2 text-xl font-black rounded-sm tracking-wider text-red-600";
+                adminToggleText.textContent = "CLOSED";
+                orderContent.classList.add('shop-closed');
+                // Reset quantities in memory when closed
+                menu.forEach(item => orderQuantities[item.id] = 0); 
+            }
+            
+            updateSummary();
+        }
+
+        // --- CORE FUNCTIONS (unchanged) ---
+
+        function renderMenu() {
+            const container = document.getElementById('menu-container');
+            container.innerHTML = menu.map(item => {
+                const isItemSoldOut = itemSoldOutStatus[item.id] || false;
+                const isDisabled = isItemSoldOut || !isShopOpen; 
+                const soldOutClass = isItemSoldOut ? 'sold-out' : ''; 
+                
+                if (isDisabled) {
+                    orderQuantities[item.id] = 0;
+                }
+
+                const ownerToggle = (window.isOwnerMode && isOwnerAuthenticated) ? `
+                    <button class="relative z-20 ml-4 p-1 text-xs font-semibold rounded-sm transition-colors duration-150 border-2 ${isItemSoldOut ? 'bg-red-600 text-white border-red-800' : 'bg-logo-green text-logo-purple border-logo-purple'}"
+                        onclick="event.stopPropagation(); toggleItemSoldOut(${item.id})">
+                        ${isItemSoldOut ? 'RE-STOCK' : 'SOLD OUT'}
+                    </button>
+                ` : '';
+
+
+                return `
+                    <div class="flex items-start p-3 bg-card-bg border-2 border-text-dark relative">
+                        
+                        <!-- Sold Out Overlay Text (if applicable) -->
+                        ${isItemSoldOut ? 
+                            '<div class="absolute inset-0 flex items-center justify-center text-2xl font-black text-white bg-red-600/80 tracking-widest z-10">SOLD OUT</div>' 
+                            : ''
+                        }
+                        
+                        <!-- Item content container -->
+                        <div class="flex flex-grow ${soldOutClass} relative">
+                            <!-- Image -->
+                            <img src="${item.imageUrl}" 
+                                 onerror="this.onerror=null;this.src='https://placehold.co/80x80/2F2E2A/4CAF50?text=🍵'"
+                                 alt="${item.name}" 
+                                 class="w-20 h-20 object-cover rounded-none mr-4 flex-shrink-0 border-2 border-text-dark">
+
+                            <!-- Text Details and Quantity Controls Container -->
+                            <div class="flex-grow min-w-0 flex flex-col justify-between">
+                                
+                                <!-- Details -->
+                                <div class="mb-2">
+                                    <h3 class="text-lg font-semibold text-text-dark">${item.name}</h3>
+                                    <p class="text-sm text-gray-700">${item.desc}</p>
+                                </div>
+
+                                <!-- Price and Quantity Controls -->
+                                <div class="flex justify-between items-center mt-1">
+                                    <p class="text-xl font-bold text-matcha-highlight">RM ${item.price.toFixed(2)}</p>
+                                    
+                                    <!-- OWNER TOGGLE BUTTON -->
+                                    ${ownerToggle}
+                                    
+                                    <!-- Quantity Controls (Disabled if sold out) -->
+                                    <div class="flex items-center space-x-1 ml-auto">
+                                        <button class="quantity-btn" 
+                                                onclick="updateQuantity(${item.id}, -1)"
+                                                ${isDisabled ? 'disabled' : ''}>
+                                            &minus;
+                                        </button>
+                                        
+                                        <input type="number" 
+                                                id="qty-${item.id}" 
+                                                value="${orderQuantities[item.id] || 0}" 
+                                                min="0" 
+                                                readonly 
+                                                class="quantity-input">
+                                                
+                                        <button class="quantity-btn" 
+                                                onclick="updateQuantity(${item.id}, 1)"
+                                                ${isDisabled ? 'disabled' : ''}>
+                                            &plus;
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function updateQuantity(itemId, change) {
+            const isItemSoldOut = itemSoldOutStatus[itemId] || false;
+            if (isItemSoldOut || !isShopOpen) return;
+            
+            let currentQty = orderQuantities[itemId] || 0;
+            let newQty = currentQty + change;
+            
+            if (newQty < 0) {
+                newQty = 0;
+            }
+            
+            orderQuantities[itemId] = newQty;
+            document.getElementById(`qty-${itemId}`).value = newQty;
+            
+            updateSummary();
+        }
+
+        function updateSummary() {
+            let totalCost = 0;
+            let totalItems = 0; 
+
+            menu.forEach(item => {
+                const qty = orderQuantities[item.id] || 0;
+                const isItemSoldOut = itemSoldOutStatus[item.id] || false;
+                
+                if (!isItemSoldOut) {
+                    totalCost += qty * item.price;
+                    totalItems += qty;
+                }
+            });
+
+            document.getElementById('total-price').textContent = `RM ${totalCost.toFixed(2)}`;
+            const confirmBtn = document.getElementById('confirm-button');
+            confirmBtn.disabled = totalItems === 0 || !isShopOpen; 
+        }
+
+        function confirmOrder() {
+            if (!isShopOpen) return; 
+
+            if (WHATSAPP_NUMBER === "60123456789") {
+                document.getElementById('whatsapp-message').classList.remove('hidden');
+                console.error("Please update the WHATSAPP_NUMBER in the script before deploying.");
+                return;
+            }
+            
+            const customerName = document.getElementById('customer-name').value.trim();
+            const orderNotes = document.getElementById('order-notes').value.trim();
+            
+            if (!customerName) {
+                document.getElementById('confirm-button').classList.add('animate-pulse');
+                setTimeout(() => document.getElementById('confirm-button').classList.remove('animate-pulse'), 1000);
+                document.getElementById('customer-name').focus(); 
+                return;
+            }
+
+            const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            
+            const orderedItems = [];
+            let totalCost = 0;
+            
+            menu.forEach(item => {
+                const isItemSoldOut = itemSoldOutStatus[item.id] || false;
+                if (isItemSoldOut) return; 
+
+                const qty = orderQuantities[item.id];
+                if (qty > 0) {
+                    const lineTotal = qty * item.price;
+                    orderedItems.push({
+                        name: item.name,
+                        qty: qty,
+                        price: item.price,
+                        total: lineTotal
+                    });
+                    totalCost += lineTotal;
+                }
+            });
+
+            if (orderedItems.length === 0) {
+                console.error("No items selected.");
+                return;
+            }
+
+            let message = `☢️ NEW ORDER (${timestamp}) from Goji Cha! ☢️\n`;
+            message += `CUSTOMER: ${customerName}\n`;
+            message += `PICKUP: Level 17 \n\n`; 
+            message += "--- Customer Order ---\n";
+            
+            orderedItems.forEach(item => {
+                message += `${item.qty}x ${item.name} (RM ${(item.qty * item.price).toFixed(2)})\n`;
+            });
+            
+            message += `---------------------------\n`;
+            message += `Total Due: RM ${totalCost.toFixed(2)}\n\n`;
+
+            if (orderNotes) {
+                message += `*** SPECIAL NOTES: ***\n`;
+                message += `${orderNotes}\n\n`;
+            }
+            
+            message += "Hi Goji Cha! Please confirm the availability and my pickup time.";
+            
+            console.log("Generated Message:", message);
+            
+            const encodedMessage = encodeURIComponent(message);
+            const whatsappUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodedMessage}`;
+            
+            window.open(whatsappUrl, '_blank');
+        }
+
+        // --- INITIALIZATION ---
+        window.onload = () => {
+             // Initial status update renders the default CLOSED state immediately
+             updateShopUI(); 
+             renderMenu(); 
+        };
+
+    </script>
+</body>
+</html>
